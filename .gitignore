@@ -3,3 +3,6 @@ sessions/
 config/config.local.json
 *.log
 .env
+.venv/
+__pycache__/
+*.egg-info/
