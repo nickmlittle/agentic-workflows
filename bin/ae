@@ -1,0 +1,61 @@
+#!/usr/bin/env zsh
+
+set -euo pipefail
+
+AE_HOME="${AE_HOME:-$HOME/.agentic-workflows}"
+CONFIG="$AE_HOME/config/config.local.json"
+
+cmd="${1:-help}"
+
+function ae_help() {
+  cat <<HELP
+ae - agentic engineering cockpit
+
+Commands:
+  ae ctx       Print current repo/worktree context
+  ae doctor    Check local setup
+  ae help      Show this help
+HELP
+}
+
+function ae_doctor() {
+  echo "Checking agentic workflow setup..."
+  command -v git >/dev/null && echo "✅ git" || echo "❌ git missing"
+  command -v gh >/dev/null && echo "✅ gh" || echo "❌ gh missing"
+  command -v code >/dev/null && echo "✅ code" || echo "❌ code CLI missing"
+  command -v jq >/dev/null && echo "✅ jq" || echo "❌ jq missing"
+  command -v warp >/dev/null && echo "✅ warp" || echo "⚠️ warp CLI not found"
+  [[ -f "$CONFIG" ]] && echo "✅ config: $CONFIG" || echo "❌ config missing: $CONFIG"
+}
+
+function ae_ctx() {
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+
+  if [[ -z "$repo_root" ]]; then
+    echo "Not inside a git repo."
+    exit 1
+  fi
+
+  repo_name=$(basename "$repo_root")
+  branch=$(git branch --show-current 2>/dev/null || echo "detached")
+  head=$(git rev-parse --short HEAD)
+  remote=$(git remote get-url origin 2>/dev/null || echo "none")
+  main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@refs/remotes/origin/@@' || echo "main")
+
+  echo "Repo:        $repo_name"
+  echo "Path:        $repo_root"
+  echo "Branch:      $branch"
+  echo "HEAD:        $head"
+  echo "Remote:      $remote"
+  echo "Base:        origin/$main_branch"
+  echo
+  echo "Changed files:"
+  git status --short
+}
+
+case "$cmd" in
+  ctx) ae_ctx ;;
+  doctor) ae_doctor ;;
+  help|--help|-h) ae_help ;;
+  *) echo "Unknown command: $cmd"; ae_help; exit 1 ;;
+esac

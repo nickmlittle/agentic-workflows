@@ -1,0 +1,5 @@
+.DS_Store
+sessions/
+config/config.local.json
+*.log
+.env
