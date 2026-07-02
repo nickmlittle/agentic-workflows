@@ -4,16 +4,20 @@ set -euo pipefail
 
 INSTALL_DIR="$HOME/.agentic-workflows"
 BIN_DIR="$HOME/bin"
+SOURCE_DIR="$(pwd)"
 
 mkdir -p "$BIN_DIR"
 
-if [[ "$PWD" != "$INSTALL_DIR" ]]; then
-  echo "Installing to $INSTALL_DIR"
-  rm -rf "$INSTALL_DIR"
-  git clone "$(pwd)" "$INSTALL_DIR"
-else
-  echo "Already in install dir."
-fi
+echo "Installing from $SOURCE_DIR to $INSTALL_DIR"
+
+rm -rf "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+
+rsync -a \
+  --exclude '.git' \
+  --exclude 'sessions' \
+  --exclude 'config/config.local.json' \
+  "$SOURCE_DIR/" "$INSTALL_DIR/"
 
 ln -sf "$INSTALL_DIR/bin/ae" "$BIN_DIR/ae"
 
@@ -23,5 +27,6 @@ fi
 
 echo
 echo "Installed ae."
-echo "Add this to ~/.zshrc if needed:"
-echo 'export PATH="$HOME/bin:$PATH"'
+echo "Run:"
+echo '  export PATH="$HOME/bin:$PATH"'
+echo '  ae doctor'
