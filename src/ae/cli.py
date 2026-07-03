@@ -228,7 +228,8 @@ Commands:
   ae help      Show this help
   ae review [pr]  Create/open a Claude PR review worktree/session
   ae start     Guided workflow launcher
-  ae task <ticket>  Create/open a Claude Jira ticket worktree/session"""
+  ae task <ticket>  Create/open a Claude Jira ticket worktree/session
+  ae work <name>  Create/open a generic Claude worktree"""
     )
 
 
@@ -369,21 +370,78 @@ def run_review(settings: Settings, pr: Optional[int]) -> None:
 
 
 @app.command()
-def task(ticket: str = typer.Argument(..., metavar="ticket")) -> None:
+def task(
+    ticket: str = typer.Argument(..., metavar="ticket"),
+    branch: Optional[str] = typer.Option(
+        None,
+        "--branch",
+        "-b",
+        help="Rename the created worktree branch.",
+    ),
+) -> None:
     """Create/open a Claude worktree for a Jira ticket."""
     settings = get_settings()
-    run_task(settings, ticket)
+    run_task(settings, ticket, branch)
 
 
-def run_task(settings: Settings, ticket: str) -> None:
-    repo_root = choose_repo_for_worktree(settings.repos_root)
-    repo_name = repo_root.name
+def run_task(settings: Settings, ticket: str, branch: Optional[str]) -> None:
     ticket_key = ticket.strip()
     if not ticket_key:
         typer.echo("Ticket is required.", err=True)
         raise typer.Exit(1)
 
-    worktree_name = sanitize_worktree_name(ticket_key)
+    run_work(
+        settings,
+        work_name=ticket_key,
+        branch=branch,
+        work_type="jira_task",
+        display_label="Ticket",
+        prompt_filename="task-prompt.md",
+        prompt_builder=build_task_prompt,
+    )
+
+
+@app.command()
+def work(
+    name: str = typer.Argument(..., metavar="name"),
+    branch: Optional[str] = typer.Option(
+        None,
+        "--branch",
+        "-b",
+        help="Rename the created worktree branch.",
+    ),
+) -> None:
+    """Create/open a generic Claude worktree."""
+    settings = get_settings()
+    run_work(
+        settings,
+        work_name=name,
+        branch=branch,
+        work_type="work",
+        display_label="Work",
+        prompt_filename="work-prompt.md",
+        prompt_builder=build_work_prompt,
+    )
+
+
+def run_work(
+    settings: Settings,
+    work_name: str,
+    branch: Optional[str],
+    work_type: str,
+    display_label: str,
+    prompt_filename: str,
+    prompt_builder: Any,
+) -> None:
+    repo_root = choose_repo_for_worktree(settings.repos_root)
+    repo_name = repo_root.name
+    work_label = work_name.strip()
+    if not work_label:
+        typer.echo(f"{display_label} name is required.", err=True)
+        raise typer.Exit(1)
+
+    worktree_name = sanitize_worktree_name(work_label)
+    branch_name = normalize_branch_name(branch)
     session_dir = settings.data_dir / "sessions" / repo_name / worktree_name
 
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -394,33 +452,41 @@ def run_task(settings: Settings, ticket: str) -> None:
         repo_root,
         settings.worktree_dir_name,
         worktree_name,
-        "ae task",
+        "ae work",
     )
+    if branch_name:
+        rename_worktree_branch(worktree_path, branch_name)
 
+    current_branch = git_output("branch", "--show-current", cwd=worktree_path, default="")
     session = {
-        "type": "jira_task",
+        "type": work_type,
         "repo": repo_name,
         "repo_root": str(repo_root),
-        "ticket": ticket_key,
+        "name": work_label,
+        "branch": current_branch,
         "worktree_name": worktree_name,
         "worktree_path": str(worktree_path),
     }
+    if work_type == "jira_task":
+        session["ticket"] = work_label
     write_json(session_dir / "session.json", session)
-    prompt = build_task_prompt(ticket_key, repo_name, worktree_path)
-    (session_dir / "task-prompt.md").write_text(prompt, encoding="utf-8")
+    prompt = prompt_builder(work_label, repo_name, worktree_path)
+    (session_dir / prompt_filename).write_text(prompt, encoding="utf-8")
 
     run_post_worktree_actions(settings, repo_name, worktree_name, worktree_path)
 
     typer.echo()
-    typer.echo("✅ Task worktree ready")
+    typer.echo(f"✅ {display_label} worktree ready")
     typer.echo(f"Repo:      {repo_name} ({repo_root})")
-    typer.echo(f"Ticket:    {ticket_key}")
+    typer.echo(f"{display_label}:      {work_label}")
+    if current_branch:
+        typer.echo(f"Branch:    {current_branch}")
     typer.echo(f"Worktree:  {worktree_path}")
     typer.echo(f"Session:   {session_dir}")
     typer.echo()
     typer.echo("Suggested next commands:")
     typer.echo(f"  cd {shlex.quote(str(worktree_path))}")
-    typer.echo(f"  claude < {shlex.quote(str(session_dir / 'task-prompt.md'))}")
+    typer.echo(f"  claude < {shlex.quote(str(session_dir / prompt_filename))}")
 
 
 @app.command()
@@ -479,9 +545,18 @@ def start() -> None:
     settings = get_settings()
     action = select_start_action()
 
-    if action == "task":
-        ticket = typer.prompt("Jira ticket")
-        run_task(settings, ticket)
+    if action == "work":
+        work_name = typer.prompt("Worktree name")
+        branch = typer.prompt("Branch name (blank to use worktree name)", default="")
+        run_work(
+            settings,
+            work_name=work_name,
+            branch=branch,
+            work_type="work",
+            display_label="Work",
+            prompt_filename="work-prompt.md",
+            prompt_builder=build_work_prompt,
+        )
     elif action == "review":
         pr = typer.prompt("PR number", type=int)
         run_review(settings, pr)
@@ -537,7 +612,7 @@ def select_repo(repos_root: Path) -> Path:
 
 def select_start_action() -> str:
     choices = [
-        ("Start Jira task worktree", "task"),
+        ("Start worktree", "work"),
         ("Review GitHub PR", "review"),
         ("Resume existing worktree", "resume"),
         ("Clean Claude worktrees", "clean"),
@@ -811,6 +886,33 @@ def open_claude_worktree(
     return detected
 
 
+def normalize_branch_name(branch: Optional[str]) -> str | None:
+    if branch is None:
+        return None
+    branch_name = branch.strip()
+    if not branch_name:
+        return None
+    if branch_name.startswith("-") or branch_name.endswith("/"):
+        typer.echo(f"Invalid branch name: {branch_name}", err=True)
+        raise typer.Exit(1)
+    return branch_name
+
+
+def rename_worktree_branch(worktree_path: Path, branch_name: str) -> None:
+    current_branch = git_output("branch", "--show-current", cwd=worktree_path, default="")
+    if current_branch == branch_name:
+        return
+    if not current_branch:
+        typer.echo("Worktree is detached; cannot rename branch.", err=True)
+        raise typer.Exit(1)
+
+    result = run_git("branch", "-m", branch_name, cwd=worktree_path, check=False)
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip()
+        typer.echo(f"Could not rename branch to {branch_name}: {message}", err=True)
+        raise typer.Exit(result.returncode)
+
+
 def sanitize_worktree_name(value: str) -> str:
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("-")
     if not name:
@@ -940,7 +1042,10 @@ def open_warp_claude_quad(
         typer.echo("Warp app not found; skipping Warp launch.")
         return
 
-    config_stem = sanitize_worktree_name(f"ae-{repo_name}-{session_name}").lower()
+    launch_id = str(time.time_ns())
+    config_stem = sanitize_worktree_name(
+        f"ae-{repo_name}-{session_name}-{launch_id}"
+    ).lower()
     config_path = settings.warp_tab_config_dir / f"{config_stem}.toml"
     settings.warp_tab_config_dir.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
@@ -1141,6 +1246,24 @@ Instructions:
 - Inspect the repo context and existing patterns first.
 - Explain your intended approach before making broad changes.
 - Keep changes focused on the ticket.
+- Run relevant tests or explain why they were not run.
+"""
+
+
+def build_work_prompt(work_name: str, repo_name: str, worktree_path: Path) -> str:
+    return f"""You are working on {work_name} in repo {repo_name}.
+
+Work:
+{work_name}
+
+Worktree:
+{worktree_path}
+
+Instructions:
+- Understand the work intent before editing files.
+- Inspect the repo context and existing patterns first.
+- Explain your intended approach before making broad changes.
+- Keep changes focused on the named work.
 - Run relevant tests or explain why they were not run.
 """
 

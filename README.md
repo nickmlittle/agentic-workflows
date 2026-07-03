@@ -37,10 +37,15 @@ ae clean        # Select Claude worktrees to remove
 ae doctor       # Check local setup
 ae ctx          # Print current repo/worktree context
 ae start        # Guided workflow launcher
+ae work "name"  # Create/open a generic Claude worktree
 ae review <pr>  # Create/open a Claude PR review worktree/session
 ae review       # Pick a configured repo, then enter a PR number
 ae task PED-123 # Create/open a Claude Jira ticket worktree/session
 ```
+
+`ae work "name"` creates a Claude worktree for ad hoc work that does not have a
+Jira ticket or PR. Use `--branch <branch-name>` when you want the git branch to
+have a different name from the worktree.
 
 `ae review 12345` runs from the current git repo, fetches latest refs, asks
 Claude to create/open `pr-12345` as a worktree, saves PR metadata plus a review
@@ -49,7 +54,7 @@ worktree in VS Code when the configured editor CLI is available.
 
 `ae task PED-123` confirms the current repo when run inside one, otherwise it
 prompts you to pick from `repos_root`, then asks Claude to create/open a worktree
-for the ticket.
+for the ticket. It also accepts `--branch <branch-name>`.
 
 After a worktree is ready, `ae` runs configured post-worktree actions. By
 default it opens the worktree in the configured editor and opens a Warp window
@@ -60,7 +65,7 @@ directories, lets you select worktrees to remove, then removes them with
 `git worktree remove`. When `questionary` is installed, selection uses an
 arrow-key checkbox UI; otherwise it falls back to a numbered prompt.
 
-`ae start` opens a guided menu for starting a task, reviewing a PR, resuming an
+`ae start` opens a guided menu for starting work, reviewing a PR, resuming an
 existing Claude worktree, cleaning worktrees, or running doctor.
 
 Example config:
