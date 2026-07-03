@@ -10,7 +10,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 from urllib.parse import quote
 
 try:
@@ -46,6 +46,20 @@ class Settings:
     warp_open_new_window: bool
     warp_start_command: str
     warp_tab_config_dir: Path
+
+
+@dataclass(frozen=True)
+class ClaudeWorktree:
+    repo_name: str
+    repo_root: Path
+    path: Path
+    name: str
+    is_dirty: bool
+
+    @property
+    def label(self) -> str:
+        status = "dirty" if self.is_dirty else "clean"
+        return f"{self.repo_name}/{self.name} ({status}) - {self.path}"
 
 
 def main() -> None:
@@ -208,10 +222,12 @@ def help_command() -> None:
         """ae - agentic engineering cockpit
 
 Commands:
+  ae clean     Remove selected Claude worktrees
   ae ctx       Print current repo/worktree context
   ae doctor    Check local setup
   ae help      Show this help
   ae review [pr]  Create/open a Claude PR review worktree/session
+  ae start     Guided workflow launcher
   ae task <ticket>  Create/open a Claude Jira ticket worktree/session"""
     )
 
@@ -273,6 +289,10 @@ def ctx() -> None:
 def review(pr: Optional[int] = typer.Argument(None, metavar="pr")) -> None:
     """Create/open a Claude PR review worktree/session."""
     settings = get_settings()
+    run_review(settings, pr)
+
+
+def run_review(settings: Settings, pr: Optional[int]) -> None:
     repo_root = maybe_current_repo_root()
     if repo_root is None or pr is None:
         repo_root = select_repo(settings.repos_root)
@@ -352,6 +372,10 @@ def review(pr: Optional[int] = typer.Argument(None, metavar="pr")) -> None:
 def task(ticket: str = typer.Argument(..., metavar="ticket")) -> None:
     """Create/open a Claude worktree for a Jira ticket."""
     settings = get_settings()
+    run_task(settings, ticket)
+
+
+def run_task(settings: Settings, ticket: str) -> None:
     repo_root = choose_repo_for_worktree(settings.repos_root)
     repo_name = repo_root.name
     ticket_key = ticket.strip()
@@ -399,6 +423,78 @@ def task(ticket: str = typer.Argument(..., metavar="ticket")) -> None:
     typer.echo(f"  claude < {shlex.quote(str(session_dir / 'task-prompt.md'))}")
 
 
+@app.command()
+def clean(
+    all_worktrees: bool = typer.Option(
+        False,
+        "--all",
+        help="Remove all detected Claude worktrees without selecting individually.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Pass --force to git worktree remove.",
+    ),
+) -> None:
+    """Remove selected Claude worktrees under repos_root."""
+    settings = get_settings()
+    run_clean(settings, all_worktrees, force)
+
+
+def run_clean(settings: Settings, all_worktrees: bool, force: bool) -> None:
+    worktrees = find_claude_worktrees(settings.repos_root, settings.worktree_dir_name)
+    if not worktrees:
+        typer.echo(f"No Claude worktrees found under {settings.repos_root}.")
+        return
+
+    selected = worktrees if all_worktrees else select_worktrees_to_clean(worktrees)
+    if not selected:
+        typer.echo("No worktrees selected.")
+        return
+
+    typer.echo()
+    typer.echo("Selected worktrees:")
+    for worktree in selected:
+        typer.echo(f"  {worktree.label}")
+
+    if not typer.confirm("Remove these worktrees?", default=False):
+        typer.echo("Cancelled.")
+        return
+
+    failures = 0
+    for worktree in selected:
+        if remove_worktree(worktree, force):
+            typer.echo(f"Removed {worktree.path}")
+        else:
+            failures += 1
+
+    if failures:
+        raise typer.Exit(1)
+
+
+@app.command()
+def start() -> None:
+    """Guide through common ae workflows."""
+    settings = get_settings()
+    action = select_start_action()
+
+    if action == "task":
+        ticket = typer.prompt("Jira ticket")
+        run_task(settings, ticket)
+    elif action == "review":
+        pr = typer.prompt("PR number", type=int)
+        run_review(settings, pr)
+    elif action == "resume":
+        run_resume(settings)
+    elif action == "clean":
+        run_clean(settings, all_worktrees=False, force=False)
+    elif action == "doctor":
+        doctor()
+    else:
+        typer.echo("Cancelled.")
+
+
 def stream_command(args: list[str], cwd: Path) -> None:
     result = subprocess.run(args, cwd=cwd)
     if result.returncode != 0:
@@ -437,6 +533,227 @@ def select_repo(repos_root: Path) -> Path:
         typer.echo("Invalid repo selection.", err=True)
         raise typer.Exit(1)
     return repos[choice - 1]
+
+
+def select_start_action() -> str:
+    choices = [
+        ("Start Jira task worktree", "task"),
+        ("Review GitHub PR", "review"),
+        ("Resume existing worktree", "resume"),
+        ("Clean Claude worktrees", "clean"),
+        ("Run doctor", "doctor"),
+        ("Cancel", "cancel"),
+    ]
+    selected = select_choice("What do you want to do?", choices)
+    return selected or "cancel"
+
+
+def run_resume(settings: Settings) -> None:
+    worktrees = find_claude_worktrees(settings.repos_root, settings.worktree_dir_name)
+    if not worktrees:
+        typer.echo(f"No Claude worktrees found under {settings.repos_root}.")
+        return
+
+    worktree = select_one_worktree("Select worktree to resume:", worktrees)
+    if worktree is None:
+        typer.echo("Cancelled.")
+        return
+
+    run_post_worktree_actions(settings, worktree.repo_name, worktree.name, worktree.path)
+
+    typer.echo()
+    typer.echo("✅ Worktree resumed")
+    typer.echo(f"Repo:      {worktree.repo_name} ({worktree.repo_root})")
+    typer.echo(f"Worktree:  {worktree.path}")
+    typer.echo()
+    typer.echo("Suggested next commands:")
+    typer.echo(f"  cd {shlex.quote(str(worktree.path))}")
+    typer.echo("  claude")
+
+
+def select_one_worktree(
+    message: str,
+    worktrees: Sequence[ClaudeWorktree],
+) -> ClaudeWorktree | None:
+    choices = [(worktree.label, worktree) for worktree in worktrees]
+    return select_choice(message, choices)
+
+
+def select_choice(
+    message: str,
+    choices: Sequence[tuple[str, Any]],
+) -> Any | None:
+    if sys.stdin.isatty():
+        try:
+            import questionary
+        except ModuleNotFoundError:
+            pass
+        else:
+            answer = questionary.select(
+                message,
+                choices=[
+                    questionary.Choice(title=title, value=value)
+                    for title, value in choices
+                ],
+            ).ask()
+            return answer
+
+    typer.echo(message)
+    for index, (title, _) in enumerate(choices, start=1):
+        typer.echo(f"  {index}. {title}")
+
+    choice = typer.prompt("Select", type=int)
+    if choice < 1 or choice > len(choices):
+        typer.echo("Invalid selection.", err=True)
+        raise typer.Exit(1)
+    return choices[choice - 1][1]
+
+
+def find_claude_worktrees(repos_root: Path, worktree_dir_name: str) -> list[ClaudeWorktree]:
+    if not repos_root.is_dir():
+        typer.echo(f"repos_root does not exist: {repos_root}", err=True)
+        raise typer.Exit(1)
+
+    worktrees: list[ClaudeWorktree] = []
+    for worktree_parent in repos_root.rglob(f"{worktree_dir_name}/worktrees"):
+        if not worktree_parent.is_dir():
+            continue
+        for path in sorted(worktree_parent.iterdir(), key=lambda item: item.name.lower()):
+            if not is_git_worktree_dir(path):
+                continue
+            repo_root = main_repo_for_worktree(path)
+            if repo_root is None:
+                continue
+            worktrees.append(
+                ClaudeWorktree(
+                    repo_name=repo_root.name,
+                    repo_root=repo_root,
+                    path=path,
+                    name=path.name,
+                    is_dirty=worktree_is_dirty(path),
+                )
+            )
+
+    return sorted(worktrees, key=lambda item: (item.repo_name.lower(), item.name.lower()))
+
+
+def main_repo_for_worktree(path: Path) -> Path | None:
+    git_file = path / ".git"
+    if not git_file.is_file():
+        return None
+
+    first_line = git_file.read_text(encoding="utf-8", errors="replace").splitlines()[0:1]
+    if not first_line or not first_line[0].startswith("gitdir:"):
+        return None
+
+    gitdir_value = first_line[0].removeprefix("gitdir:").strip()
+    gitdir = Path(gitdir_value)
+    if not gitdir.is_absolute():
+        gitdir = (path / gitdir).resolve()
+
+    if gitdir.parent.name != "worktrees":
+        return None
+
+    main_git_dir = gitdir.parent.parent
+    repo_root = main_git_dir.parent
+    if (main_git_dir / "config").exists() and repo_root.is_dir():
+        return repo_root
+    return None
+
+
+def worktree_is_dirty(path: Path) -> bool:
+    result = run_command(["git", "-C", str(path), "status", "--short"], check=False)
+    return bool(result.stdout.strip()) if result.returncode == 0 else True
+
+
+def select_worktrees_to_clean(worktrees: Sequence[ClaudeWorktree]) -> list[ClaudeWorktree]:
+    selected = select_worktrees_with_questionary(worktrees)
+    if selected is not None:
+        return selected
+    return select_worktrees_with_prompt(worktrees)
+
+
+def select_worktrees_with_questionary(
+    worktrees: Sequence[ClaudeWorktree],
+) -> list[ClaudeWorktree] | None:
+    if not sys.stdin.isatty():
+        return None
+
+    try:
+        import questionary
+    except ModuleNotFoundError:
+        return None
+
+    choices = [
+        questionary.Choice(title=worktree.label, value=worktree)
+        for worktree in worktrees
+    ]
+    answer = questionary.checkbox(
+        "Select Claude worktrees to remove:",
+        choices=choices,
+    ).ask()
+    if answer is None:
+        return []
+    return list(answer)
+
+
+def select_worktrees_with_prompt(worktrees: Sequence[ClaudeWorktree]) -> list[ClaudeWorktree]:
+    typer.echo("Claude worktrees:")
+    for index, worktree in enumerate(worktrees, start=1):
+        typer.echo(f"  {index}. {worktree.label}")
+    typer.echo()
+    raw = typer.prompt("Select worktrees (for example 1,3-5; blank cancels)", default="")
+    indexes = parse_index_selection(raw, len(worktrees))
+    return [worktrees[index - 1] for index in indexes]
+
+
+def parse_index_selection(raw: str, max_index: int) -> list[int]:
+    selected: set[int] = set()
+    for part in raw.replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part:
+            start_raw, end_raw = part.split("-", 1)
+            if not start_raw.isdigit() or not end_raw.isdigit():
+                typer.echo(f"Invalid selection: {part}", err=True)
+                raise typer.Exit(1)
+            start = int(start_raw)
+            end = int(end_raw)
+            if start > end:
+                start, end = end, start
+            selected.update(range(start, end + 1))
+        elif part.isdigit():
+            selected.add(int(part))
+        else:
+            typer.echo(f"Invalid selection: {part}", err=True)
+            raise typer.Exit(1)
+
+    invalid = [index for index in selected if index < 1 or index > max_index]
+    if invalid:
+        typer.echo(f"Selection out of range: {', '.join(map(str, invalid))}", err=True)
+        raise typer.Exit(1)
+    return sorted(selected)
+
+
+def remove_worktree(worktree: ClaudeWorktree, force: bool) -> bool:
+    args = [
+        "git",
+        "-C",
+        str(worktree.repo_root),
+        "worktree",
+        "remove",
+    ]
+    if force:
+        args.append("--force")
+    args.append(str(worktree.path))
+
+    result = run_command(args, check=False)
+    if result.returncode == 0:
+        return True
+
+    message = result.stderr.strip() or result.stdout.strip()
+    typer.echo(f"Could not remove {worktree.path}: {message}", err=True)
+    return False
 
 
 def add_info_exclude(repo_root: Path, worktree_dir_name: str) -> None:
@@ -510,19 +827,36 @@ def detect_worktree_path(
     started_at: float,
 ) -> Path | None:
     worktree_root = repo_root / worktree_dir_name
-    expected = worktree_root / worktree_name
+    expected_paths = [
+        worktree_root / worktree_name,
+        worktree_root / "worktrees" / worktree_name,
+    ]
+    candidates = path_candidates(command_output)
 
-    for candidate in path_candidates(command_output):
-        if candidate.is_dir():
+    for candidate in candidates:
+        if candidate.name == worktree_name and is_git_worktree_dir(candidate):
             return candidate
 
-    if expected.is_dir():
-        return expected
+    for expected in expected_paths:
+        if is_git_worktree_dir(expected):
+            return expected
 
-    if not worktree_root.is_dir():
+    for candidate in candidates:
+        if is_git_worktree_dir(candidate):
+            return candidate
+
+    search_roots = [
+        path for path in [worktree_root, worktree_root / "worktrees"] if path.is_dir()
+    ]
+    if not search_roots:
         return None
 
-    dirs = [path for path in worktree_root.iterdir() if path.is_dir()]
+    dirs = [
+        path
+        for search_root in search_roots
+        for path in search_root.iterdir()
+        if is_git_worktree_dir(path)
+    ]
     if not dirs:
         return None
 
@@ -540,10 +874,14 @@ def detect_worktree_path(
     return max(dirs, key=lambda path: path.stat().st_mtime)
 
 
+def is_git_worktree_dir(path: Path) -> bool:
+    return path.is_dir() and (path / ".git").exists()
+
+
 def path_candidates(output: str) -> list[Path]:
     candidates: list[Path] = []
     for raw in re.split(r"[\s'\"<>]+", output):
-        token = raw.strip().rstrip(".,:;")
+        token = raw.strip("`[]()").rstrip(".,:;").strip("`[]()")
         if not token or "/" not in token:
             continue
         path = Path(token).expanduser()

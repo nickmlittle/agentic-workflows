@@ -33,8 +33,10 @@ Or run it immediately with the full path:
 ## Commands
 
 ```sh
+ae clean        # Select Claude worktrees to remove
 ae doctor       # Check local setup
 ae ctx          # Print current repo/worktree context
+ae start        # Guided workflow launcher
 ae review <pr>  # Create/open a Claude PR review worktree/session
 ae review       # Pick a configured repo, then enter a PR number
 ae task PED-123 # Create/open a Claude Jira ticket worktree/session
@@ -52,6 +54,14 @@ for the ticket.
 After a worktree is ready, `ae` runs configured post-worktree actions. By
 default it opens the worktree in the configured editor and opens a Warp window
 with four Claude panes, all started in the worktree directory.
+
+`ae clean` scans `repos_root` recursively for `.claude/worktrees/<name>`
+directories, lets you select worktrees to remove, then removes them with
+`git worktree remove`. When `questionary` is installed, selection uses an
+arrow-key checkbox UI; otherwise it falls back to a numbered prompt.
+
+`ae start` opens a guided menu for starting a task, reviewing a PR, resuming an
+existing Claude worktree, cleaning worktrees, or running doctor.
 
 Example config:
 
@@ -78,5 +88,6 @@ Example config:
 - GitHub SSH access for cloning this private repo
 - `gh` authenticated for `ae review`
 - `claude` for Claude worktree creation
+- `questionary` for checkbox selection in `ae clean`
 - Warp if you want four Claude panes opened after worktree creation
 - `code` if you want review worktrees opened in VS Code

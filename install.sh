@@ -23,8 +23,9 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   python3 -m venv "$VENV_DIR" || fail "could not create Python virtualenv at $VENV_DIR"
 fi
 
-"$VENV_DIR/bin/python" -m pip install -q --disable-pip-version-check "typer>=0.12" || fail "could not install Typer"
+"$VENV_DIR/bin/python" -m pip install -q --disable-pip-version-check "typer>=0.12" "questionary>=2.0" || fail "could not install Python dependencies"
 "$VENV_DIR/bin/python" -c "import typer" || fail "Typer was installed but could not be imported"
+"$VENV_DIR/bin/python" -c "import questionary" || fail "Questionary was installed but could not be imported"
 
 ln -sf "$REPO_DIR/bin/ae" "$BIN_DIR/ae"
 chmod +x "$REPO_DIR/bin/ae"

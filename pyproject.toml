@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Small agentic engineering workflow CLI"
 requires-python = ">=3.9"
 dependencies = [
+  "questionary>=2.0",
   "typer>=0.12",
 ]
 
