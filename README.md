@@ -35,7 +35,40 @@ Or run it immediately with the full path:
 ```sh
 ae doctor       # Check local setup
 ae ctx          # Print current repo/worktree context
-ae review <pr>  # Create a PR review worktree/session
+ae review <pr>  # Create/open a Claude PR review worktree/session
+ae review       # Pick a configured repo, then enter a PR number
+ae task PED-123 # Create/open a Claude Jira ticket worktree/session
+```
+
+`ae review 12345` runs from the current git repo, fetches latest refs, asks
+Claude to create/open `pr-12345` as a worktree, saves PR metadata plus a review
+prompt under `~/.local/share/ae/sessions/<repo>/pr-12345/`, and opens the
+worktree in VS Code when the configured editor CLI is available.
+
+`ae task PED-123` confirms the current repo when run inside one, otherwise it
+prompts you to pick from `repos_root`, then asks Claude to create/open a worktree
+for the ticket.
+
+After a worktree is ready, `ae` runs configured post-worktree actions. By
+default it opens the worktree in the configured editor and opens a Warp window
+with four Claude panes, all started in the worktree directory.
+
+Example config:
+
+```json
+{
+  "repos_root": "~/Projects",
+  "worktree_dir_name": ".claude",
+  "editor": "code",
+  "post_worktree_actions": ["editor", "warp_claude_quad"],
+  "warp": {
+    "enabled": true,
+    "claude_panes": 4,
+    "open_new_window": true,
+    "start_command": "claude",
+    "tab_config_dir": "~/.warp/tab_configs"
+  }
+}
 ```
 
 ## Requirements
@@ -44,4 +77,6 @@ ae review <pr>  # Create a PR review worktree/session
 - `git`
 - GitHub SSH access for cloning this private repo
 - `gh` authenticated for `ae review`
+- `claude` for Claude worktree creation
+- Warp if you want four Claude panes opened after worktree creation
 - `code` if you want review worktrees opened in VS Code

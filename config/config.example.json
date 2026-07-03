@@ -1,6 +1,15 @@
 {
-  "worktree_root": "~/worktrees",
+  "repos_root": "~/Projects",
+  "worktree_dir_name": ".claude",
   "main_branch": "main",
   "editor": "code",
-  "github_remote": "origin"
+  "github_remote": "origin",
+  "post_worktree_actions": ["editor", "warp_claude_quad"],
+  "warp": {
+    "enabled": true,
+    "claude_panes": 4,
+    "open_new_window": true,
+    "start_command": "claude",
+    "tab_config_dir": "~/.warp/tab_configs"
+  }
 }
